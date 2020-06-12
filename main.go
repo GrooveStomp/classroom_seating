@@ -1,18 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/husobee/vestigo"
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
 	"io/ioutil"
 	"log"
 	"net/http"
+
+	_ "github.com/lib/pq"
+
+	"github.com/BurntSushi/toml"
+	"github.com/Masterminds/squirrel"
+	"github.com/husobee/vestigo"
 )
 
 var (
-	db *sqlx.DB
+	db      *sql.DB
+	psql    squirrel.StatementBuilderType
+	dbCache squirrel.DBProxyBeginner
 )
 
 func main() {
@@ -38,10 +43,18 @@ func main() {
 		cfg.Database.Name,
 	)
 
-	db, err = sqlx.Connect("postgres", dbString)
+	db, err = sql.Open("postgres", dbString)
 	if err != nil {
 		log.Fatalln(err)
 	}
+
+	err = db.Ping()
+	if err != nil {
+		log.Fatalf("Error opening database connection: %v", err.Error())
+	}
+
+	dbCache = squirrel.NewStmtCacheProxy(db)
+	psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
 	router.Get("/", ShowRoot)
 	router.Get("/register", ShowRegistration)
