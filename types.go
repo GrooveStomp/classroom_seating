@@ -2,8 +2,8 @@ package main
 
 import (
 	"database/sql"
-	"time"
 	"net/http"
+	"time"
 )
 
 type Config struct {
@@ -26,7 +26,7 @@ type HttpServerConfig struct {
 type User struct {
 	Id        sql.NullString
 	Username  string
-	Password  string
+	Password  []byte
 	CreatedAt time.Time      `db:"created_at"`
 	UpdatedAt time.Time      `db:"updated_at"`
 	DeletedAt sql.NullString `db:"deleted_at"`
