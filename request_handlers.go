@@ -1,14 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
-	"golang.org/x/crypto/bcrypt"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/Masterminds/squirrel"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func ShowRoot(w http.ResponseWriter, r *http.Request) {
@@ -43,12 +46,13 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 		Password: encryptedPass,
 	}
 
-	row := db.QueryRowx(
-		`INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id`,
-		newUser.Username,
-		newUser.Password,
-	)
-	err = row.Scan(&newUser.Id)
+	query := psql.Insert("users").
+		Columns("username", "password").
+		Values(newUser.Username, newUser.Password).
+		Suffix("RETURNING ?", "id").
+		RunWith(db)
+
+	err = query.Scan(&newUser.Id)
 	if err != nil {
 		log.Println(err)
 		http.Error(w, "Error registering", http.StatusInternalServerError)
@@ -67,22 +71,23 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		Username: r.FormValue("username"),
 	}
 
-	// Find the user.
-	err := db.Get(
-		&user,
-		`SELECT * FROM users WHERE username = $1`,
-		user.Username,
-	)
+	query := psql.Select("id,username,password").
+		From("users").
+		Where("username = ?", user.Username).
+		Where("deleted_at IS NULL").
+		RunWith(db)
+
+	err := query.Scan(&user.Id, &user.Username, &user.Password)
 	if err != nil || !user.Id.Valid {
-		log.Println(err)
-		http.Error(w, "Error logging in", http.StatusUnauthorized)
+		log.Printf("Couldn't find user: %v\n", err.Error())
+		http.Error(w, "Error logging in", http.StatusNotFound)
 		return
 	}
 
 	incomingPass := []byte(r.FormValue("password"))
 	err = bcrypt.CompareHashAndPassword(user.Password, incomingPass)
 	if err != nil {
-		log.Println(err)
+		log.Printf("Password didn't match: %v\n", err.Error())
 		http.Error(w, "Error logging in", http.StatusUnauthorized)
 		return
 	}
@@ -93,35 +98,47 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	if err == nil {
 		// We have an auth token that is still valid, let's use that.
-		_, err = db.Exec(
-			`UPDATE authentications SET updated_at = $1 WHERE token = $2 AND deleted_at IS NULL`,
-			time.Now(),
-			authToken,
-		)
+		query := psql.Update("authentications").
+			SetMap(squirrel.Eq{"updated_at": time.Now()}).
+			Where("token = ?", authToken).
+			Where("deleted_at IS NULL").
+			Suffix("RETURNING id").
+			RunWith(db)
+
+		var _id int
+		err = query.Scan(&_id)
 		if err != nil {
-			log.Println(err)
+			log.Printf("Couldn't update existing auth token: %#+v\n", err.Error())
 			http.Error(w, "Error", http.StatusInternalServerError)
+			return
 		}
 	} else {
 		// Create a new authentication for this user.
-		row := db.QueryRowx(`INSERT INTO authentications (user_id) VALUES ($1) RETURNING token`, userId)
-		err = row.Scan(&authToken)
+		query := psql.Insert("authentications").
+			Columns("user_id").
+			Values(userId).
+			Suffix("RETURNING token").
+			RunWith(db)
+
+		err = query.Scan(&authToken)
 		if err != nil {
-			log.Println(err)
+			log.Printf("Couldn't create new authentication: %v\n", err.Error())
 			http.Error(w, "Error logging in", http.StatusInternalServerError)
 			return
 		}
 	}
 
 	// Invalidate all outstanding authentications for this user.
-	_, err = db.Exec(
-		`UPDATE authentications SET deleted_at = $1 WHERE user_id = $2 AND deleted_at IS NULL and token != $3`,
-		time.Now(),
-		userId,
-		authToken,
-	)
-	if err != nil {
-		log.Println(err)
+	updateQuery := psql.Update("authentications").
+		SetMap(squirrel.Eq{"deleted_at": time.Now()}).
+		Where("user_id = ?", userId).
+		Where("deleted_at IS NULL").
+		Where("token != ?", authToken).
+		RunWith(db)
+
+	err = updateQuery.Scan()
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("Couldn't delete outstanding authentications: %v\n", err.Error())
 		http.Error(w, "Error logging in", http.StatusInternalServerError)
 		return
 	}
@@ -147,12 +164,14 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Couldn't authenticate", http.StatusBadRequest)
 	}
 
-	_, err = db.Exec(
-		`UPDATE authentications SET deleted_at = $1 WHERE user_id = $2 AND deleted_at IS NULL`,
-		time.Now(),
-		userId,
-	)
-	if err != nil {
+	query := psql.Update("authentications").
+		SetMap(squirrel.Eq{"deleted_at": time.Now()}).
+		Where("user_id = ?", userId).
+		Where("deleted_at IS NULL").
+		RunWith(db)
+
+	err = query.Scan()
+	if err != nil && err != sql.ErrNoRows {
 		log.Println(err)
 		http.Error(w, "Couldn't clear authentications", http.StatusInternalServerError)
 		return
@@ -176,12 +195,14 @@ func authenticate(c Cookier) (string, error) {
 	}
 
 	var userId string
-	err = db.Get(
-		&userId,
-		`SELECT user_id FROM authentications WHERE token = $1 AND deleted_at IS NULL AND updated_at > $2`,
-		authCookie.Value,
-		fifteenMinutesBefore(time.Now()),
-	)
+	query := psql.Select("user_id").
+		From("authentications").
+		Where("token = ?", authCookie.Value).
+		Where("deleted_at IS NULL").
+		Where("updated_at > ?", fifteenMinutesBefore(time.Now())).
+		RunWith(dbCache)
+
+	err = query.Scan(&userId)
 	if err != nil {
 		log.Println(err)
 		return "", err
@@ -194,12 +215,15 @@ func authenticate(c Cookier) (string, error) {
 func findLoginAuthToken(userId string) (string, error) {
 	// Get the last authentication.
 	var authToken string
-	err := db.Get(
-		&authToken,
-		`SELECT token FROM authentications WHERE user_id = $1 AND deleted_at IS NULL AND updated_at > $2`,
-		userId,
-		fifteenMinutesBefore(time.Now()),
-	)
+
+	query := psql.Select("token").
+		From("authentications").
+		Where("user_id = ?", userId).
+		Where("deleted_at IS NULL").
+		Where("updated_at > ?", fifteenMinutesBefore(time.Now())).
+		RunWith(dbCache)
+
+	err := query.Scan(&authToken)
 	if err != nil {
 		return "", err
 	}
