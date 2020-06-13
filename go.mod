@@ -5,8 +5,10 @@ go 1.14
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/Masterminds/squirrel v1.4.0
+	github.com/davecgh/go-spew v1.1.1
 	github.com/husobee/vestigo v1.1.0
 	github.com/jmoiron/sqlx v1.2.0
+	github.com/json-iterator/go v1.1.10
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/justinas/alice v1.2.0
 	github.com/justinas/nosurf v1.1.0
@@ -19,4 +21,5 @@ require (
 	github.com/throttled/throttled v2.2.4+incompatible
 	golang.org/x/crypto v0.0.0-20200604202706-70a84ac30bf9
 	golang.org/x/tools v0.0.0-20181119130350-139d099f6620 // indirect
+	gopkg.in/guregu/null.v4 v4.0.0
 )

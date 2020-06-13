@@ -3,92 +3,119 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
-	"net/url"
-	"strings"
-	"text/template"
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/crypto/bcrypt"
 )
 
-func ShowRoot(w http.ResponseWriter, r *http.Request) {
-	logHandlerIntro(r.Method, r.URL.Path, r.Form)
-	renderPage(w, r, "templates/index.tmpl", "Home")
-}
-
-func ShowRegistration(w http.ResponseWriter, r *http.Request) {
-	logHandlerIntro(r.Method, r.URL.Path, r.Form)
-	renderPage(w, r, "templates/registration.tmpl", "Registration")
-}
-
-func ShowLogin(w http.ResponseWriter, r *http.Request) {
-	logHandlerIntro(r.Method, r.URL.Path, r.Form)
-	renderPage(w, r, "templates/login.tmpl", "Login")
-}
-
 func CreateUser(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	logHandlerIntro(r.Method, r.URL.Path, r.Form)
+	signup := struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{}
 
-	password := r.FormValue("password")
-	encryptedPass, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		log.Println(err)
-		http.Error(w, "Error registering", http.StatusInternalServerError)
+		log.Print(err)
+		http.Error(w, "Can't read request body", http.StatusBadRequest)
+	}
+
+	err = json.Unmarshal(body, &signup)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Can't unmarshal request body", http.StatusBadRequest)
+	}
+
+	encryptedPass, err := bcrypt.GenerateFromPassword([]byte(signup.Password), bcrypt.MinCost)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Can't encrypt password", http.StatusInternalServerError)
 		return
 	}
 
 	newUser := User{
-		Username: r.FormValue("username"),
+		Username: signup.Username,
 		Password: encryptedPass,
 	}
 
 	query := psql.Insert("users").
 		Columns("username", "password").
 		Values(newUser.Username, newUser.Password).
-		Suffix("RETURNING ?", "id").
+		Suffix("RETURNING id").
 		RunWith(db)
 
 	err = query.Scan(&newUser.Id)
 	if err != nil {
-		log.Println(err)
-		http.Error(w, "Error registering", http.StatusInternalServerError)
+		log.Print(err)
+		http.Error(w, "Can't create new user", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("User added: %+v\n", newUser)
-	fmt.Fprintln(w, "Success!")
+	querySel := psql.Select("id,username,created_at,updated_at").
+		From("users").
+		Where("id = ?", newUser.Id).
+		RunWith(dbCache)
+
+	err = querySel.Scan(&newUser.Id, &newUser.Username, &newUser.CreatedAt, &newUser.UpdatedAt)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Error fetching user", http.StatusInternalServerError)
+		return
+	}
+
+	out, err := json.MarshalIndent(newUser, "", "    ")
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Can't marshal response", http.StatusInternalServerError)
+	}
+
+	fmt.Fprintln(w, string(out))
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	logHandlerIntro(r.Method, r.URL.Path, r.Form)
+	login := struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}{}
 
-	user := User{
-		Username: r.FormValue("username"),
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Can't read request body", http.StatusBadRequest)
 	}
+
+	err = json.Unmarshal(body, &login)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Can't unmarshal request body", http.StatusBadRequest)
+	}
+
+	spew.Dump(login)
 
 	query := psql.Select("id,username,password").
 		From("users").
-		Where("username = ?", user.Username).
+		Where("username = ?", login.Username).
+		//		Where("password = ?", encryptedPass).
 		Where("deleted_at IS NULL").
-		RunWith(db)
+		RunWith(dbCache)
 
-	err := query.Scan(&user.Id, &user.Username, &user.Password)
+	user := User{}
+	err = query.Scan(&user.Id, &user.Username, &user.Password)
 	if err != nil || !user.Id.Valid {
-		log.Printf("Couldn't find user: %v\n", err.Error())
-		http.Error(w, "Error logging in", http.StatusNotFound)
+		log.Print(err)
+		http.Error(w, "Couldn't find user", http.StatusNotFound)
 		return
 	}
 
-	incomingPass := []byte(r.FormValue("password"))
-	err = bcrypt.CompareHashAndPassword(user.Password, incomingPass)
+	err = bcrypt.CompareHashAndPassword(user.Password, []byte(login.Password))
 	if err != nil {
-		log.Printf("Password didn't match: %v\n", err.Error())
-		http.Error(w, "Error logging in", http.StatusUnauthorized)
+		log.Print("Password didn't match")
+		http.Error(w, "Couldn't find user", http.StatusNotFound)
 		return
 	}
 
@@ -150,19 +177,23 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, cookie)
 
-	log.Printf("Logged in as: %+v\n", user)
-	fmt.Fprintln(w, "Success!")
+	outData := struct {
+		AuthToken string `json:"auth_token"`
+	}{
+		AuthToken: authToken,
+	}
+
+	out, err := json.MarshalIndent(outData, "", "    ")
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Can't marshal response", http.StatusInternalServerError)
+	}
+
+	fmt.Fprintln(w, string(out))
 }
 
 func Logout(w http.ResponseWriter, r *http.Request) {
-	logHandlerIntro(r.Method, r.URL.Path, r.Form)
-	fmt.Fprintln(w, "Success!")
-
-	userId, err := authenticate(r)
-	if err != nil {
-		log.Println(err)
-		http.Error(w, "Couldn't authenticate", http.StatusBadRequest)
-	}
+	userId := r.Context().Value("userId").(string)
 
 	query := psql.Update("authentications").
 		SetMap(squirrel.Eq{"deleted_at": time.Now()}).
@@ -170,46 +201,20 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 		Where("deleted_at IS NULL").
 		RunWith(db)
 
-	err = query.Scan()
+	err := query.Scan()
 	if err != nil && err != sql.ErrNoRows {
-		log.Println(err)
+		log.Printf("here %v", err)
 		http.Error(w, "Couldn't clear authentications", http.StatusInternalServerError)
 		return
 	}
+
+	log.Print("Logged out")
 }
 
 //-- Private, internal helpers.
 
 func fifteenMinutesBefore(t time.Time) time.Time {
 	return t.Add(-time.Minute * 15)
-}
-
-func logHandlerIntro(requestMethod, requestPath string, requestData url.Values) {
-	log.Printf("%s %q: %+v\n", requestMethod, requestPath, requestData)
-}
-
-func authenticate(c Cookier) (string, error) {
-	authCookie, err := c.Cookie("authtoken")
-	if err != nil {
-		return "", err
-	}
-
-	var userId string
-	query := psql.Select("user_id").
-		From("authentications").
-		Where("token = ?", authCookie.Value).
-		Where("deleted_at IS NULL").
-		Where("updated_at > ?", fifteenMinutesBefore(time.Now())).
-		RunWith(dbCache)
-
-	err = query.Scan(&userId)
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
-
-	log.Printf("Authenticated as: %v\n", userId)
-	return userId, nil
 }
 
 func findLoginAuthToken(userId string) (string, error) {
@@ -230,26 +235,4 @@ func findLoginAuthToken(userId string) (string, error) {
 
 	log.Printf("findLoginAuthToken: authToken: %s\n", authToken)
 	return authToken, nil
-}
-
-func renderPage(w http.ResponseWriter, r *http.Request, templateName, title string) {
-	userId, _ := authenticate(r)
-
-	t := template.Must(
-		template.ParseFiles(
-			"templates/header.tmpl",
-			"templates/navigation.tmpl",
-			"templates/footer.tmpl",
-			templateName))
-
-	data := PageData{
-		Title:         title,
-		Authenticated: userId != "",
-	}
-
-	err := t.ExecuteTemplate(w, strings.ToLower(title), data)
-
-	if err != nil {
-		log.Println(err)
-	}
 }

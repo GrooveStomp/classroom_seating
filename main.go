@@ -13,6 +13,7 @@ import (
 	"github.com/justinas/alice"
 
 	mw "github.com/GrooveStomp/classroom_seating/internal/middleware"
+	jsoniter "github.com/json-iterator/go"
 	_ "github.com/lib/pq"
 )
 
@@ -20,9 +21,12 @@ var (
 	db      *sql.DB
 	psql    squirrel.StatementBuilderType
 	dbCache squirrel.DBProxyBeginner
+	json    jsoniter.API
 )
 
 func main() {
+	json = jsoniter.ConfigCompatibleWithStandardLibrary
+
 	dat, err := ioutil.ReadFile("cfg.toml")
 	if err != nil {
 		log.Fatal(err)
@@ -56,15 +60,13 @@ func main() {
 	dbCache = squirrel.NewStmtCacheProxy(db)
 	psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
-	mwares := alice.New(mw.Cors, mw.Throttle, mw.Log)
+	mwareNoAuth := alice.New(mw.Cors, mw.Throttle, mw.Log)
+	mwareAuth := mwareNoAuth.Append(mw.MakeAuthenticate(psql, dbCache))
 
 	router := httprouter.New()
-	router.Handler("GET", "/", mwares.ThenFunc(ShowRoot))
-	router.Handler("GET", "/register", mwares.ThenFunc(ShowRegistration))
-	router.Handler("GET", "/login", mwares.ThenFunc(ShowLogin))
-	router.Handler("POST", "/users", mwares.ThenFunc(CreateUser))
-	router.Handler("POST", "/login", mwares.ThenFunc(Login))
-	router.Handler("GET", "/logout", mwares.ThenFunc(Logout))
+	router.Handler("POST", "/users", mwareNoAuth.ThenFunc(CreateUser))
+	router.Handler("POST", "/login", mwareNoAuth.ThenFunc(Login))
+	router.Handler("GET", "/logout", mwareAuth.ThenFunc(Logout))
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%v", cfg.Server.Port), router))
 }
