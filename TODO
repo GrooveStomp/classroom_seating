@@ -1,0 +1,23 @@
+- Only return json data, no html
+- jsoniter?
+- start thinking about moving away from cookies onto jwt
+
+- jwt
+  https://github.com/gbrlsnchs/jwt
+
+- Learn about writing http middlewares in Go
+  https://www.nicolasmerouze.com/middlewares-golang-best-practices-examples
+  Specifically the panic recovery one
+
+- Svelte for frontend
+  https://svelte.dev/
+
+- Spew for debugging Go objects
+  https://github.com/davecgh/go-spew
+
+- structured logging
+  https://github.com/Sirupsen/logrus
+
+- Go error contexts
+  https://github.com/juju/errgo
+  Or just read the errors package and see what's available there.
