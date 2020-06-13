@@ -7,11 +7,13 @@ import (
 	"log"
 	"net/http"
 
-	_ "github.com/lib/pq"
-
 	"github.com/BurntSushi/toml"
 	"github.com/Masterminds/squirrel"
-	"github.com/husobee/vestigo"
+	"github.com/julienschmidt/httprouter"
+	"github.com/justinas/alice"
+
+	mw "github.com/GrooveStomp/classroom_seating/internal/middleware"
+	_ "github.com/lib/pq"
 )
 
 var (
@@ -21,8 +23,6 @@ var (
 )
 
 func main() {
-	router := vestigo.NewRouter()
-
 	dat, err := ioutil.ReadFile("cfg.toml")
 	if err != nil {
 		log.Fatal(err)
@@ -56,12 +56,15 @@ func main() {
 	dbCache = squirrel.NewStmtCacheProxy(db)
 	psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
-	router.Get("/", ShowRoot)
-	router.Get("/register", ShowRegistration)
-	router.Get("/login", ShowLogin)
-	router.Post("/users", CreateUser)
-	router.Post("/login", Login)
-	router.Get("/logout", Logout)
+	mwares := alice.New(mw.Cors, mw.Throttle, mw.Log)
+
+	router := httprouter.New()
+	router.Handler("GET", "/", mwares.ThenFunc(ShowRoot))
+	router.Handler("GET", "/register", mwares.ThenFunc(ShowRegistration))
+	router.Handler("GET", "/login", mwares.ThenFunc(ShowLogin))
+	router.Handler("POST", "/users", mwares.ThenFunc(CreateUser))
+	router.Handler("POST", "/login", mwares.ThenFunc(Login))
+	router.Handler("GET", "/logout", mwares.ThenFunc(Logout))
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%v", cfg.Server.Port), router))
 }
