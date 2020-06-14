@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"time"
 
@@ -8,6 +10,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/Masterminds/squirrel"
 	"github.com/throttled/throttled"
 )
 
@@ -42,4 +45,50 @@ func Log(next http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(fn)
+}
+
+func MakeAuthenticate(psql squirrel.StatementBuilderType, db *sql.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			token := r.Header.Get("X-Auth-Token")
+
+			fifteenMinutesAgo := time.Now().Add(-time.Minute * 15)
+
+			var userId string
+			query := psql.Select("user_id").
+				From("authentications").
+				Where("token = ?", token).
+				Where("deleted_at IS NULL").
+				Where("updated_at > ?", fifteenMinutesAgo).
+				RunWith(db)
+
+			err := query.Scan(&userId)
+			if err != nil {
+				log.Print(err)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			} else {
+				// We have an auth token that is still valid, let's use that.
+				queryUpdate := psql.Update("authentications").
+					SetMap(squirrel.Eq{"updated_at": time.Now()}).
+					Where("token = ?", token).
+					Where("deleted_at IS NULL").
+					Suffix("RETURNING id").
+					RunWith(db)
+
+				var _id int
+				err = queryUpdate.Scan(&_id)
+				if err != nil {
+					log.Printf("Couldn't update existing auth token: %#+v\n", err)
+					http.Error(w, "Error", http.StatusInternalServerError)
+					return
+				}
+
+				ctx := context.WithValue(r.Context(), "userId", userId)
+				next.ServeHTTP(w, r.WithContext(ctx))
+			}
+		}
+
+		return http.HandlerFunc(fn)
+	}
 }

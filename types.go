@@ -1,9 +1,10 @@
 package main
 
 import (
-	"database/sql"
 	"net/http"
 	"time"
+
+	"gopkg.in/guregu/null.v4"
 )
 
 type Config struct {
@@ -24,12 +25,12 @@ type HttpServerConfig struct {
 }
 
 type User struct {
-	Id        sql.NullString
-	Username  string
-	Password  []byte
-	CreatedAt time.Time      `db:"created_at"`
-	UpdatedAt time.Time      `db:"updated_at"`
-	DeletedAt sql.NullString `db:"deleted_at"`
+	Id        null.String `db:"id" json:"id"`
+	Username  string      `json:"username"`
+	Password  []byte      `json:"-"`
+	CreatedAt time.Time   `db:"created_at" json:"created_at"`
+	UpdatedAt time.Time   `db:"updated_at" json:"updated_at"`
+	DeletedAt null.Time   `db:"deleted_at" json:"-"`
 }
 
 type PageData struct {
