@@ -61,7 +61,7 @@ func main() {
 	psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
 	mwareNoAuth := alice.New(mw.Cors, mw.Throttle, mw.Log)
-	mwareAuth := mwareNoAuth.Append(mw.MakeAuthenticate(psql, dbCache))
+	mwareAuth := mwareNoAuth.Append(mw.MakeAuthenticate(psql, db))
 
 	router := httprouter.New()
 	router.Handler("POST", "/users", mwareNoAuth.ThenFunc(CreateUser))

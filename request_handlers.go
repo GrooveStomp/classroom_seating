@@ -155,6 +155,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// TODO: Don't do this - allow multiple simultaneous logins from different devices.
 	// Invalidate all outstanding authentications for this user.
 	updateQuery := psql.Update("authentications").
 		SetMap(squirrel.Eq{"deleted_at": time.Now()}).
