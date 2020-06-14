@@ -1,4 +1,7 @@
-classroom-seating
-cfg.toml
+.*
 .env
+\#*
 cfg.test.toml
+cfg.toml
+classroom-seating
+classroom_seating
