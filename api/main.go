@@ -11,6 +11,7 @@ import (
 	"github.com/Masterminds/squirrel"
 	"github.com/julienschmidt/httprouter"
 	"github.com/justinas/alice"
+	"github.com/rs/cors"
 
 	mw "github.com/GrooveStomp/classroom_seating/internal/middleware"
 	jsoniter "github.com/json-iterator/go"
@@ -60,7 +61,7 @@ func main() {
 	dbCache = squirrel.NewStmtCacheProxy(db)
 	psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
-	mwareNoAuth := alice.New(mw.Cors, mw.Throttle, mw.Log)
+	mwareNoAuth := alice.New(mw.Throttle, mw.Log)
 	mwareAuth := mwareNoAuth.Append(mw.MakeAuthenticate(psql, db))
 
 	router := httprouter.New()
@@ -68,5 +69,13 @@ func main() {
 	router.Handler("POST", "/login", mwareNoAuth.ThenFunc(Login))
 	router.Handler("GET", "/logout", mwareAuth.ThenFunc(Logout))
 
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%v", cfg.Server.Port), router))
+	c := cors.New(cors.Options{
+		Debug:          true,
+		AllowedHeaders: []string{"X-Auth-Token", "Content-Type"},
+	})
+
+	log.Fatal(http.ListenAndServe(
+		fmt.Sprintf(":%v", cfg.Server.Port),
+		c.Handler(router),
+	))
 }

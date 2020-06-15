@@ -6,12 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	// TODO: "github.com/justinas/nosurf"
-
-	log "github.com/sirupsen/logrus"
-
 	"github.com/Masterminds/squirrel"
 	"github.com/throttled/throttled"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func Throttle(next http.Handler) http.Handler {
@@ -29,11 +27,6 @@ func Throttle(next http.Handler) http.Handler {
 	}
 
 	return httpRateLimiter.RateLimit(next)
-}
-
-func Cors(next http.Handler) http.Handler {
-	// TODO: return nosurf.NewPure(next)
-	return next
 }
 
 func Log(next http.Handler) http.Handler {
