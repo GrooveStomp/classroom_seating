@@ -1,14 +1,10 @@
-- start thinking about moving away from cookies onto jwt
-
 - jwt
   https://github.com/gbrlsnchs/jwt
+  Use this instead of custom X-Auth-Token header.
 
 - Learn about writing http middlewares in Go
   https://www.nicolasmerouze.com/middlewares-golang-best-practices-examples
-  Specifically the panic recovery one
-
-- Svelte for frontend
-  https://svelte.dev/
+  Specifically the panic recovery one.
 
 - structured logging
   https://github.com/Sirupsen/logrus
