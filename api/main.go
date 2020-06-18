@@ -61,7 +61,7 @@ func main() {
 	dbCache = squirrel.NewStmtCacheProxy(db)
 	psql = squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar)
 
-	mwareNoAuth := alice.New(mw.Throttle, mw.Log)
+	mwareNoAuth := alice.New(mw.RecoverFromPanic, mw.Throttle, mw.Log)
 	mwareAuth := mwareNoAuth.Append(mw.MakeAuthenticate(psql, db))
 
 	router := httprouter.New()
