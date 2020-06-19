@@ -1,8 +1,9 @@
-CREATE TABLE authentications(
-    id SERIAL PRIMARY KEY,
+CREATE TABLE sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id),
-    token UUID NOT NULL DEFAULT gen_random_uuid(),
+    server_token UUID NOT NULL DEFAULT gen_random_uuid(),
+    client_token UUID NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT Now() + INTERVAL '7 days',
     created_at TIMESTAMPTZ NOT NULL DEFAULT Now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT Now(),
-    deleted_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT Now()
 );

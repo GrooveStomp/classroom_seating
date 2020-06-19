@@ -1,1 +1,1 @@
-DROP TABLE authentications;
+DROP TABLE sessions;

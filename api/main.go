@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 
 	"github.com/BurntSushi/toml"
@@ -13,9 +12,11 @@ import (
 	"github.com/justinas/alice"
 	"github.com/rs/cors"
 
+	c "github.com/GrooveStomp/classroom_seating/internal/common"
 	mw "github.com/GrooveStomp/classroom_seating/internal/middleware"
 	jsoniter "github.com/json-iterator/go"
 	_ "github.com/lib/pq"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -34,7 +35,7 @@ func main() {
 	}
 	strDat := string(dat)
 
-	var cfg Config
+	var cfg c.Config
 	if _, err := toml.Decode(strDat, &cfg); err != nil {
 		log.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func main() {
 
 	c := cors.New(cors.Options{
 		Debug:          true,
-		AllowedHeaders: []string{"X-Auth-Token", "Content-Type"},
+		AllowedHeaders: []string{"Content-Type", "X-Client-Token", "X-Request-ID"},
 	})
 
 	log.Fatal(http.ListenAndServe(

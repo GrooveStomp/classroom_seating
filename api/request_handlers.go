@@ -4,13 +4,17 @@ import (
 	"database/sql"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/davecgh/go-spew/spew"
 	"golang.org/x/crypto/bcrypt"
+	"gopkg.in/square/go-jose.v2/jwt"
+
+	c "github.com/GrooveStomp/classroom_seating/internal/common"
+	log "github.com/sirupsen/logrus"
+	jose "gopkg.in/square/go-jose.v2"
 )
 
 func CreateUser(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +42,7 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newUser := User{
+	newUser := c.User{
 		Username: signup.Username,
 		Password: encryptedPass,
 	}
@@ -78,6 +82,8 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func Login(w http.ResponseWriter, r *http.Request) {
+	//-- Get data from the request -----------------------------------------------
+
 	login := struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -97,6 +103,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 
 	spew.Dump(login)
 
+	//-- Get data from the database to validate request data against -------------
+
 	query := psql.Select("id,username,password").
 		From("users").
 		Where("username = ?", login.Username).
@@ -104,9 +112,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		Where("deleted_at IS NULL").
 		RunWith(dbCache)
 
-	user := User{}
+	user := c.User{}
 	err = query.Scan(&user.Id, &user.Username, &user.Password)
-	if err != nil || !user.Id.Valid {
+	if err != nil {
 		log.Print(err)
 		http.Error(w, "Couldn't find user", http.StatusNotFound)
 		return
@@ -119,69 +127,52 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Already checked the case where this fails above.
-	userId, _ := user.Id.Value()
-	authToken, err := findLoginAuthToken(userId.(string))
+	//-- Create a new session for the user ---------------------------------------
 
-	if err == nil {
-		// We have an auth token that is still valid, let's use that.
-		query := psql.Update("authentications").
-			SetMap(squirrel.Eq{"updated_at": time.Now()}).
-			Where("token = ?", authToken).
-			Where("deleted_at IS NULL").
-			Suffix("RETURNING id").
-			RunWith(db)
-
-		var _id int
-		err = query.Scan(&_id)
-		if err != nil {
-			log.Printf("Couldn't update existing auth token: %#+v\n", err.Error())
-			http.Error(w, "Error", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		// Create a new authentication for this user.
-		query := psql.Insert("authentications").
-			Columns("user_id").
-			Values(userId).
-			Suffix("RETURNING token").
-			RunWith(db)
-
-		err = query.Scan(&authToken)
-		if err != nil {
-			log.Printf("Couldn't create new authentication: %v\n", err.Error())
-			http.Error(w, "Error logging in", http.StatusInternalServerError)
-			return
-		}
+	clientToken := r.Header.Get("X-Client-Token")
+	if clientToken == "" {
+		log.Info("X-Client-Token is empty")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
 	}
 
-	// TODO: Don't do this - allow multiple simultaneous logins from different devices.
-	// Invalidate all outstanding authentications for this user.
-	updateQuery := psql.Update("authentications").
-		SetMap(squirrel.Eq{"deleted_at": time.Now()}).
-		Where("user_id = ?", userId).
-		Where("deleted_at IS NULL").
-		Where("token != ?", authToken).
+	queryInsert := psql.Insert("sessions").
+		Columns("user_id", "client_token").
+		Values(user.Id, clientToken).
+		Suffix("RETURNING id").
 		RunWith(db)
 
-	err = updateQuery.Scan()
-	if err != nil && err != sql.ErrNoRows {
-		log.Printf("Couldn't delete outstanding authentications: %v\n", err.Error())
+	session := c.Session{}
+	err = queryInsert.Scan(&session.Id)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Info("Couldn't create new session")
 		http.Error(w, "Error logging in", http.StatusInternalServerError)
 		return
 	}
 
-	cookie := &http.Cookie{
-		Name:    "authtoken",
-		Value:   authToken,
-		Expires: time.Now().UTC().Add(time.Minute * 15),
+	query2 := psql.Select("user_id", "client_token", "server_token", "expires_at").
+		From("sessions").
+		Where("id = ?", session.Id).
+		RunWith(dbCache)
+
+	err = query2.Scan(&session.UserId, &session.ClientToken, &session.ServerToken, &session.ExpiresAt)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Info("Couldn't retrieve session")
+		http.Error(w, "Error logging in", http.StatusInternalServerError)
+		return
 	}
-	http.SetCookie(w, cookie)
+
+	webToken, err := makeJwt(session)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Info("Couldn't make jwt")
+		http.Error(w, "Error logging in", http.StatusInternalServerError)
+		return
+	}
 
 	outData := struct {
-		AuthToken string `json:"auth_token"`
+		Jwt string `json:"jwt"`
 	}{
-		AuthToken: authToken,
+		Jwt: webToken,
 	}
 
 	out, err := json.MarshalIndent(outData, "", "    ")
@@ -196,7 +187,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 func Logout(w http.ResponseWriter, r *http.Request) {
 	userId := r.Context().Value("userId").(string)
 
-	query := psql.Update("authentications").
+	// TODO: Need to use session ID
+	query := psql.Update("sessions").
 		SetMap(squirrel.Eq{"deleted_at": time.Now()}).
 		Where("user_id = ?", userId).
 		Where("deleted_at IS NULL").
@@ -212,28 +204,39 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 	log.Print("Logged out")
 }
 
-//-- Private, internal helpers.
+//-- Private, internal helpers -------------------------------------------------
 
-func fifteenMinutesBefore(t time.Time) time.Time {
-	return t.Add(-time.Minute * 15)
-}
-
-func findLoginAuthToken(userId string) (string, error) {
-	// Get the last authentication.
-	var authToken string
-
-	query := psql.Select("token").
-		From("authentications").
-		Where("user_id = ?", userId).
-		Where("deleted_at IS NULL").
-		Where("updated_at > ?", fifteenMinutesBefore(time.Now())).
-		RunWith(dbCache)
-
-	err := query.Scan(&authToken)
+// How it works:
+// 1. Client generates a client token and does initial request.
+// 2. Server generates a server token pair for the client token.
+//    It stores this association.
+//    It returns the server token symmetrically encrypted with the client token.
+// 3. Client decrypts the server token and uses it to encrypt private data in subsequent requests.
+//    The client must use private storage for the server token!
+//    The client continues sending the client token with each request
+//    The server will look up the server token for the specified client token.
+//    "Private Data" here means the JWT.
+//
+func makeJwt(session c.Session) (string, error) {
+	sig, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.HS256, Key: session.ClientToken},
+		(&jose.SignerOptions{}).WithType("JWT"),
+	)
 	if err != nil {
 		return "", err
 	}
 
-	log.Printf("findLoginAuthToken: authToken: %s\n", authToken)
-	return authToken, nil
+	encoded := c.SymmetricEncryptBase64Encode(session.ClientToken, session.ServerToken)
+
+	claims := jwt.Claims{
+		Expiry:   jwt.NewNumericDate(session.ExpiresAt),
+		Audience: []string{encoded},
+	}
+
+	raw, err := jwt.Signed(sig).Claims(claims).CompactSerialize()
+	if err != nil {
+		return "", err
+	}
+
+	return raw, nil
 }
