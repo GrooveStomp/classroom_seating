@@ -46,8 +46,13 @@ func Log(next http.Handler) http.Handler {
 func MakeAuthenticate(psql squirrel.StatementBuilderType, db *sql.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
+
+			//-- Get the session info via the X-Client-Token -------------------------
+
+			// Get the header.
 			clientToken := r.Header.Get("X-Client-Token")
 
+			// Find a session matching te header.
 			query := psql.Select("id", "user_id", "server_token", "client_token", "expires_at").
 				From("sessions").
 				Where("client_token = ?", clientToken).
@@ -62,18 +67,9 @@ func MakeAuthenticate(psql squirrel.StatementBuilderType, db *sql.DB) func(http.
 				return
 			}
 
-			// jwt will be in 'Bearer' header.
-			fullHeader := r.Header.Get("Authorization")
-			parts := strings.Split(fullHeader, " ")
-			if parts[0] != "Bearer" {
-				log.Info("Authorization type was not Bearer")
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			}
-			webToken := parts[1]
-
-			// We have an auth token that is still valid, let's use that.
+			// Update our session so it doesn't expire for another 7 days.
 			queryUpdate := psql.Update("sessions").
-				SetMap(squirrel.Eq{"updated_at": time.Now(), "expires_at": time.Now().AddDate(0, 1, 0)}).
+				SetMap(squirrel.Eq{"updated_at": time.Now(), "expires_at": time.Now().AddDate(0, 7, 0)}).
 				Where("id = ?", session.Id).
 				Suffix("RETURNING id").
 				RunWith(db)
@@ -85,6 +81,18 @@ func MakeAuthenticate(psql squirrel.StatementBuilderType, db *sql.DB) func(http.
 				http.Error(w, "Error", http.StatusInternalServerError)
 				return
 			}
+
+			// Now we want to get information from the JWT and compare it against our
+			// session data.
+
+			// Get the JWT.
+			fullHeader := r.Header.Get("Authorization")
+			parts := strings.Split(fullHeader, " ")
+			if parts[0] != "Bearer" {
+				log.Info("Authorization type was not Bearer")
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			}
+			webToken := parts[1]
 
 			tok, err := jwt.ParseSignedAndEncrypted(webToken)
 			if err != nil {
@@ -109,12 +117,14 @@ func MakeAuthenticate(psql squirrel.StatementBuilderType, db *sql.DB) func(http.
 
 			encoded := c.SymmetricEncryptBase64Encode(session.ClientToken, session.ServerToken)
 
+			// Verify the JWT matches our session.
 			if !claims.Audience.Contains(encoded) {
 				log.Info("Encrypted server token doesn't match")
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
+			// Setup the request context so we have pervasive access to the User ID.
 			ctx := context.WithValue(r.Context(), "userId", session.UserId)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		}
