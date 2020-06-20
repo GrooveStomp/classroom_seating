@@ -37,7 +37,7 @@ func Log(next http.Handler) http.Handler {
 		t1 := time.Now()
 		next.ServeHTTP(w, r)
 		t2 := time.Now()
-		log.WithFields(log.Fields{"method": r.Method, "url": r.URL.String(), "duration": t2.Sub(t1)}).Info("[%s] %q")
+		log.WithFields(log.Fields{"method": r.Method, "url": r.URL.String(), "duration": t2.Sub(t1)}).Info("")
 	}
 
 	return http.HandlerFunc(fn)

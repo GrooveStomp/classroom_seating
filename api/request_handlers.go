@@ -108,7 +108,6 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	query := psql.Select("id,username,password").
 		From("users").
 		Where("username = ?", login.Username).
-		//		Where("password = ?", encryptedPass).
 		Where("deleted_at IS NULL").
 		RunWith(dbCache)
 
@@ -218,23 +217,40 @@ func Logout(w http.ResponseWriter, r *http.Request) {
 //    "Private Data" here means the JWT.
 //
 func makeJwt(session c.Session) (string, error) {
-	sig, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: jose.HS256, Key: session.ClientToken},
-		(&jose.SignerOptions{}).WithType("JWT"),
-	)
+	enc, err := jose.NewEncrypter(
+		jose.A128GCM,
+		jose.Recipient{
+			Algorithm: jose.A128GCMKW,
+			Key:       []byte(session.ClientToken)[0:32],
+		},
+		(&jose.EncrypterOptions{}).WithType("JWT").WithContentType("JWT"))
 	if err != nil {
+		log.Info("Error creating encrypter")
 		return "", err
 	}
 
-	encoded := c.SymmetricEncryptBase64Encode(session.ClientToken, session.ServerToken)
-
-	claims := jwt.Claims{
-		Expiry:   jwt.NewNumericDate(session.ExpiresAt),
-		Audience: []string{encoded},
+	sig, err := jose.NewSigner(
+		jose.SigningKey{
+			Algorithm: jose.HS256,
+			Key:       []byte(session.ClientToken)[0:32],
+		},
+		(&jose.SignerOptions{}).WithType("JWT"),
+	)
+	if err != nil {
+		log.Info("Error creating signer")
+		return "", err
 	}
 
-	raw, err := jwt.Signed(sig).Claims(claims).CompactSerialize()
+	//encoded := c.SymmetricEncryptBase64Encode(session.ClientToken, session.ServerToken)
+
+	claims := jwt.Claims{
+		Expiry: jwt.NewNumericDate(session.ExpiresAt),
+		Issuer: session.ServerToken,
+	}
+
+	raw, err := jwt.SignedAndEncrypted(sig, enc).Claims(claims).CompactSerialize()
 	if err != nil {
+		log.Info("Couldn't sign and encrypt JWT")
 		return "", err
 	}
 
