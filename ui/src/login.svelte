@@ -1,4 +1,6 @@
 <script>
+  import * as jsrs from 'jsrsasign';
+  import { v4 as uuid } from 'uuid';
   import { user } from './stores.js';
 
   let formData = {
@@ -8,20 +10,34 @@
   };
 
   async function login() {
+      var clientToken = uuid();
+      user.update(o => o.clientToken = clientToken);
+
       await fetch('http://localhost:9000/login', {
           method: 'POST',
           headers: {
               'Content-Type': 'application/json',
-              'Accept': 'application/json'
+              'Accept': 'application/json',
+              'X-Client-Token': clientToken
           },
           body: JSON.stringify({ username: formData.username, password: formData.password })
       })
           .then(r => r.json())
           .then(data => {
-              user.set({
-                  username: formData.username,
-                  password: formData.Password,
-                  authToken: data['auth_token']
+              var jwt = data['jwt'];
+
+              var isValid = jsrs.jws.JWS.verifyJWT(jwt, clientToken, { alg: ["HS256"] });
+              alert("Is JWT valid?: " + isValid)
+
+              var parts = jwt.split(".")
+              var header = jsrs.jws.JWS.readSafeJSONString(b64utoutf8(parts[0]));
+              var payload = jsrs.jws.JWS.readSafeJSONString(b64utoutf8(parts[1]));
+
+              alert("Encrypted JWT token: " + payload['aud']);
+
+              user.update(function(object) {
+                  object.username = formData.username;
+                  object.password = formData.password;
               });
           });
 
@@ -32,12 +48,12 @@
 <div class="login">
   <h1>Login</h1>
   <p>
-  Username:
-  <input bind:value={formData.username}>
+    Username:
+    <input bind:value={formData.username}>
   </p>
   <p>
-  Password:
-  <input type=password bind:value={formData.password}>
+    Password:
+    <input type=password bind:value={formData.password}>
   </p>
   <button on:click={login}>Login</button>
 </div>
